@@ -1,0 +1,84 @@
+{
+  "api_keys": {
+    "gemini_api_key": "",
+    "openai_api_key": "",
+    "azure_openai_api_key": "",
+    "azure_openai_endpoint": "",
+    "azure_openai_deployment": "",
+    "azure_api_version": "2024-05-01-preview"
+  },
+  "twitter_automation": {
+    "fast_mode": true,
+    "response_interval_seconds": 300,
+    "max_tweets_per_keyword_scrape": 15,
+    "media_directory": "media_files",
+    "processed_tweets_file": "processed_tweets_log.csv",
+    "analysis_config": {
+      "enable_relevance_filter": {
+        "competitor_reposts": false,
+        "likes": false,
+        "keyword_replies": false
+      },
+      "thresholds": {
+        "competitor_reposts_min": 0.4,
+        "likes_min": 0.3
+      }
+    },
+    "engagement_decision": {
+      "enabled": false,
+      "use_sentiment": false,
+      "thresholds": {
+        "quote_min": 0.75,
+        "retweet_min": 0.55,
+        "repost_min": 0.4
+      }
+    },
+    "action_config": {
+      "min_delay_between_actions_seconds": 30,
+      "max_delay_between_actions_seconds": 60,
+      "enable_competitor_reposts": true,
+      "max_posts_per_competitor_run": 1,
+      "enable_keyword_replies": false,
+      "enable_content_curation_posts": false,
+      "max_curated_posts_per_run": 1,
+      "enable_liking_tweets": false,
+      "max_likes_per_run": 4,
+      "enable_thread_analysis": false,
+      "llm_settings_for_post": {
+        "service_preference": "gemini",
+        "model_name_override": "gemini-2.0-flash",
+        "max_tokens": 220,
+        "temperature": 0.68
+      }
+    }
+  },
+  "logging": {
+    "level": "DEBUG",
+    "format": "%(asctime)s - %(levelname)s - %(module)s - %(message)s"
+  },
+  "browser_settings": {
+    "type": "chrome",
+    "headless": false,
+    "user_agent_generation": "random",
+    "window_size": "1920,1080",
+    "use_undetected_chromedriver": true,
+    "enable_stealth": true,
+    "page_load_strategy": "eager",
+    "driver_options": [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--ignore-certificate-errors",
+      "--disable-gpu",
+      "--log-level=3",
+      "--disable-notifications",
+      "--disable-popup-blocking",
+      "--disable-extensions",
+      "--disable-infobars",
+      "--blink-settings=imagesEnabled=true"
+    ],
+    "page_load_timeout_seconds": 15,
+    "script_timeout_seconds": 15,
+    "cookie_domain_url": "https://x.com",
+    "login_wait_seconds": 0
+  }
+}
