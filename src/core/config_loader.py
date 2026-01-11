@@ -72,6 +72,18 @@ class ConfigLoader:
         """Returns all loaded account configurations."""
         return self.accounts
 
+    def save_accounts_config(self, accounts: List[Dict[str, Any]]) -> bool:
+        """Saves account configurations to the accounts file."""
+        try:
+            with self.accounts_file.open('w', encoding='utf-8') as f:
+                json.dump(accounts, f, indent=2)
+            self.accounts = accounts  # Update in-memory
+            logger.info(f"Successfully saved accounts config to {self.accounts_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save accounts config: {e}")
+            return False
+
     def get_setting(self, path_str: str, default: Any = None) -> Any:
         """
         Retrieves a setting value using a dot-separated path.

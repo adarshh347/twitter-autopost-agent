@@ -77,15 +77,39 @@ def retweet_or_quote(
         time.sleep(0.6)
 
         if is_quote_tweet:
-            # Generic, resilient selection for quote option
-            try:
-                quote_option = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//div[@role='menuitem' and contains(., 'Quote')]"))
-                )
-            except TimeoutException:
-                quote_option = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='Dropdown']//a[contains(@href,'/compose/tweet')]"))
-                )
+            # Selectors based on actual Twitter/X HTML (Jan 2026)
+            # Quote is: <a href="/compose/post" role="menuitem"> containing <span>Quote</span>
+            quote_option = None
+            quote_selectors = [
+                # Primary: anchor with role=menuitem containing span with "Quote" text
+                "//a[@role='menuitem'][.//span[text()='Quote']]",
+                # Anchor with compose/post href containing Quote span
+                "//a[contains(@href, '/compose/post')][.//span[text()='Quote']]",
+                # Inside Dropdown container
+                "//div[@data-testid='Dropdown']//a[@role='menuitem'][.//span[text()='Quote']]",
+                # By span text going up to anchor
+                "//span[text()='Quote']/ancestor::a[@role='menuitem']",
+                # Menuitem anchor with Quote anywhere in text
+                "//a[@role='menuitem'][contains(., 'Quote')]",
+                # Dropdown with any anchor containing Quote
+                "//div[@data-testid='Dropdown']//a[contains(., 'Quote')]",
+            ]
+            
+            for selector in quote_selectors:
+                try:
+                    quote_option = WebDriverWait(driver, 2).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    if quote_option:
+                        logger.info(f"Found quote option with selector: {selector}")
+                        break
+                except TimeoutException:
+                    continue
+            
+            if not quote_option:
+                logger.error("Could not find Quote option in dropdown")
+                raise TimeoutException("Quote option not found with any selector")
+                
             quote_option.click()
             logger.info("Clicked 'Quote' option.")
             time.sleep(2)
