@@ -52,5 +52,13 @@ PROFILE_BANNER_XPATH = "//div[@data-testid='UserProfileHeader_Items']//ancestor:
 PROFILE_VERIFIED_BADGE_XPATH = "//div[@data-testid='UserName']//*[local-name()='svg' and @data-testid='icon-verified']"
 
 # Protected/private account indicator
+# Protected/private account indicator
 PROFILE_PROTECTED_XPATH = "//div[@data-testid='UserName']//*[local-name()='svg' and contains(@aria-label, 'Protected')]"
+
+
+# Tweet Actions & Menu
+TWEET_CARET_XPATH = "//button[@data-testid='caret']"
+MENU_DELETE_ITEM_XPATH = "//div[@role='menuitem']//span[contains(text(), 'Delete')]"
+DELETE_CONFIRM_BUTTON_XPATH = "//button[@data-testid='confirmationSheetConfirm']"
+
 

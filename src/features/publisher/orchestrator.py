@@ -13,6 +13,7 @@ from .media_manager import prepare_media_paths
 from .composer import post_new_tweet as compose_and_post
 from .reply_handler import reply_to_tweet as do_reply
 from .retweet_handler import retweet_or_quote as do_retweet_or_quote
+from .deletion_handler import delete_tweet_by_id
 
 
 # Configure logging once at import-time for this package
@@ -69,3 +70,7 @@ class TweetPublisher:
             quote_text_prompt_or_direct, llm_settings_for_quote, self.llm_service
         )
         return do_retweet_or_quote(self.browser_manager, original_tweet, final_quote_text)
+
+    async def delete_tweet(self, tweet_id: str) -> bool:
+        """Deletes a tweet given its ID."""
+        return delete_tweet_by_id(self.browser_manager, tweet_id)
