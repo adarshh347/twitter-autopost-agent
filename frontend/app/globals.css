@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+:root {
+  /* Core Colors */
+  --background: #F8F9FB;
+  --foreground: #1A1A1A;
+  
+  --primary: #2D3748;
+  --primary-foreground: #FFFFFF;
+  
+  --secondary: #E0F2F1;
+  --secondary-foreground: #00695C;
+  
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+  
+  --accent: #80CBC4;
+  --accent-soft: #E0F7FA;
+  
+  /* Glassmorphism */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  
+  --font-sans: 'Inter', sans-serif;
+}
+
+body {
+  background: radial-gradient(circle at 10% 20%, rgb(235, 245, 245) 0%, rgb(252, 253, 255) 50%, rgb(240, 250, 250) 90%);
+  color: var(--foreground);
+  min-height: 100vh;
+  font-family: var(--font-sans);
+}
+
+/* Utilities for Glassmorphism */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+/* Smooth transitions */
+.transition-slow {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
