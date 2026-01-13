@@ -187,6 +187,92 @@ class TweetScraper:
         hashtag_url = f"https://x.com/hashtag/{clean_hashtag}?f=live"
         return self.scrape_tweets_from_url(hashtag_url, "hashtag", max_tweets)
 
+    def scrape_home_timeline(self, max_tweets: int = 10) -> List[ScrapedTweet]:
+        """
+        Scrape tweets from the user's home timeline.
+        
+        Args:
+            max_tweets: Maximum number of tweets to scrape from home (default 10)
+            
+        Returns:
+            List of ScrapedTweet objects from the home timeline
+        """
+        home_url = "https://x.com/home"
+        logger.info("Navigating to home timeline for scraping. Max tweets: %s", max_tweets)
+        
+        self.browser_manager.navigate_to(home_url)
+        time.sleep(5)  # Wait for page to fully load
+        
+        scraped_tweets: List[ScrapedTweet] = []
+        seen_tweet_ids = set()
+        scroll_attempts_with_no_new_tweets = 0
+        max_scroll_attempts = 3  # Limit scroll attempts for home timeline
+        
+        progress = Progress(max_tweets, description="Scraping home timeline", unit="tweets")
+        progress.set_progress(0, status_message="Starting")
+        
+        while len(scraped_tweets) < max_tweets and scroll_attempts_with_no_new_tweets < max_scroll_attempts:
+            try:
+                tweet_card_elements = self._get_tweet_cards_from_page()
+                if not tweet_card_elements:
+                    logger.info("No tweet card elements found on the home page.")
+                    scroll_attempts_with_no_new_tweets += 1
+                    if not self.scroller.scroll_page():
+                        break
+                    time.sleep(random.uniform(self.scroll_delay_min, self.scroll_delay_max))
+                    continue
+                
+                new_tweets_found_this_scroll = 0
+                for card_el in tweet_card_elements:
+                    if len(scraped_tweets) >= max_tweets:
+                        break
+                    
+                    try:
+                        self.driver.execute_script(
+                            "arguments[0].scrollIntoView({block: 'center'});", card_el
+                        )
+                        time.sleep(0.2)
+                    except Exception as scroll_err:
+                        logger.debug("Could not scroll tweet card into view: %s", scroll_err)
+                    
+                    parsed_tweet = parse_tweet_card(card_el, logger)
+                    if parsed_tweet and parsed_tweet.tweet_id not in seen_tweet_ids:
+                        scraped_tweets.append(parsed_tweet)
+                        seen_tweet_ids.add(parsed_tweet.tweet_id)
+                        new_tweets_found_this_scroll += 1
+                        progress.set_progress(
+                            len(scraped_tweets),
+                            status_message=f"Found {len(scraped_tweets)}",
+                        )
+                
+                if new_tweets_found_this_scroll == 0:
+                    scroll_attempts_with_no_new_tweets += 1
+                else:
+                    scroll_attempts_with_no_new_tweets = 0
+                
+                if len(scraped_tweets) >= max_tweets:
+                    break
+                
+                if not self.scroller.scroll_page():
+                    break
+                
+                time.sleep(random.uniform(self.scroll_delay_min, self.scroll_delay_max))
+                
+            except TimeoutException:
+                logger.warning("Timeout during home timeline scraping.")
+                break
+            except StaleElementReferenceException:
+                logger.warning("Stale element reference, re-fetching cards.")
+                time.sleep(1)
+                continue
+            except Exception as e:
+                logger.error("Error during home timeline scraping: %s", e, exc_info=True)
+                break
+        
+        progress.finish(final_message=f"Found {len(scraped_tweets)} tweets from home timeline.")
+        logger.info("Finished scraping home timeline. Found %s tweets.", len(scraped_tweets))
+        return scraped_tweets
+
     def scrape_profile(self, profile_url: str) -> Optional[ScrapedProfile]:
         """
         Scrape profile details from a Twitter/X profile page.

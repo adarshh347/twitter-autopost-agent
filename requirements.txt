@@ -9,3 +9,6 @@ python-dotenv
 undetected-chromedriver
 selenium-stealth
 httpx
+opencv-python
+numpy
+cloudinary
