@@ -15,8 +15,10 @@ from passlib.context import CryptContext
 
 # Basic Setup to access src modules
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(PROJECT_ROOT)
 sys.path.append(os.path.join(PROJECT_ROOT, "src")) # Add src to path so 'import core' works
+sys.path.append(BACKEND_DIR)  # Add backend to path for database imports
 
 from src.core.browser_manager import BrowserManager
 from src.core.config_loader import ConfigLoader, CONFIG_DIR
@@ -53,6 +55,23 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # In a real SaaS, this would be a pool of browsers keyed by user content
 global_browser_manager: Optional[BrowserManager] = None
 session_status: str = "disconnected"  # "disconnected", "connecting", "connected"
+active_account_id: str = "adarsh"  # Currently active account
+
+# Available accounts configuration
+AVAILABLE_ACCOUNTS = {
+    "adarsh": {
+        "account_id": "adarsh",
+        "display_name": "Adarsh",
+        "cookie_file_path": "config/adarsh_cookies.json",
+        "handle": "@adarsh"
+    },
+    "kalidasa": {
+        "account_id": "kalidasa", 
+        "display_name": "DailyKalidasa",
+        "cookie_file_path": "config/kalidasa_cookies.json",
+        "handle": "@dailykalidasaa"
+    }
+}
 
 # --- Models ---
 
@@ -77,6 +96,9 @@ class RetweetRequest(BaseModel):
 class LoginResponse(BaseModel):
     message: str
     status: str
+
+class SessionStartRequest(BaseModel):
+    account_id: Optional[str] = None  # "adarsh" or "kalidasa"
 
 # --- Auth Logic (PAUSED) ---
 
@@ -159,28 +181,71 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 @app.get("/session/status")
 async def get_session_status():
     """Check if the browser session is active and connected"""
-    global global_browser_manager, session_status
+    global global_browser_manager, session_status, active_account_id
     
     if global_browser_manager and global_browser_manager.is_driver_active():
         session_status = "connected"
-        return {"status": "connected", "message": "Browser session is active"}
+        account_info = AVAILABLE_ACCOUNTS.get(active_account_id, {})
+        return {
+            "status": "connected", 
+            "message": "Browser session is active",
+            "account_id": active_account_id,
+            "account_name": account_info.get("display_name", active_account_id),
+            "handle": account_info.get("handle", "")
+        }
     else:
         session_status = "disconnected"
         return {"status": "disconnected", "message": "No active browser session"}
 
 
+@app.get("/accounts")
+async def get_available_accounts_list():
+    """Get list of available Twitter accounts"""
+    accounts_list = []
+    for acc_id, acc_info in AVAILABLE_ACCOUNTS.items():
+        accounts_list.append({
+            "account_id": acc_id,
+            "display_name": acc_info["display_name"],
+            "handle": acc_info["handle"],
+            "is_active": acc_id == active_account_id and session_status == "connected"
+        })
+    return {"accounts": accounts_list, "active_account": active_account_id if session_status == "connected" else None}
+
+
 @app.post("/session/start")
-async def start_session():
+async def start_session(request: SessionStartRequest = SessionStartRequest()):
     """
     Start a persistent browser session with saved cookies.
     The browser stays open until explicitly disconnected.
+    Optionally specify account_id to select which account to use.
     """
-    global global_browser_manager, session_status
+    global global_browser_manager, session_status, active_account_id
     
-    # Check if already connected
+    # Determine which account to use
+    requested_account = request.account_id or active_account_id
+    
+    if requested_account not in AVAILABLE_ACCOUNTS:
+        raise HTTPException(status_code=400, detail=f"Unknown account: {requested_account}. Available: {list(AVAILABLE_ACCOUNTS.keys())}")
+    
+    # Check if already connected to same account
     if global_browser_manager and global_browser_manager.is_driver_active():
-        session_status = "connected"
-        return {"status": "connected", "message": "Browser session already active"}
+        if requested_account == active_account_id:
+            session_status = "connected"
+            account_info = AVAILABLE_ACCOUNTS[active_account_id]
+            return {
+                "status": "connected", 
+                "message": f"Already connected to {account_info['display_name']}",
+                "account_id": active_account_id,
+                "account_name": account_info["display_name"],
+                "handle": account_info["handle"]
+            }
+        else:
+            # Different account requested - close current and switch
+            try:
+                global_browser_manager.close_driver()
+            except:
+                pass
+            global_browser_manager = None
     
     session_status = "connecting"
     
@@ -193,13 +258,17 @@ async def start_session():
                 pass
             global_browser_manager = None
         
-        # Load account config with cookies
-        accounts = config_loader.get_accounts_config()
-        if not accounts:
-            session_status = "disconnected"
-            raise HTTPException(status_code=400, detail="No account configured. Please set up config/accounts.json first.")
-        
-        account_config = accounts[0]
+        # Get account config from AVAILABLE_ACCOUNTS
+        account_info = AVAILABLE_ACCOUNTS[requested_account]
+        account_config = {
+            "account_id": account_info["account_id"],
+            "is_active": True,
+            "cookie_file_path": account_info["cookie_file_path"],
+            "proxy": None,
+            "post_to_community": False,
+            "community_id": None,
+            "community_name": None
+        }
         
         # Initialize browser with the account (will load cookies)
         global_browser_manager = BrowserManager(account_config=account_config, config_loader=config_loader)
@@ -217,15 +286,19 @@ async def start_session():
             session_status = "disconnected"
             global_browser_manager.close_driver()
             global_browser_manager = None
-            raise HTTPException(status_code=401, detail="Login failed. Please update your cookies in config/accounts.json")
+            raise HTTPException(status_code=401, detail=f"Login failed for {account_info['display_name']}. Please update cookies.")
         
+        # Update active account
+        active_account_id = requested_account
         session_status = "connected"
-        logger.info("Browser session started successfully")
+        logger.info(f"Browser session started successfully for {account_info['display_name']}")
         
         return {
             "status": "connected", 
-            "message": "Browser session started successfully! You can now post, retweet, and perform other actions.",
-            "account_id": account_config.get("account_id", "default")
+            "message": f"Connected to {account_info['display_name']}! You can now post, retweet, and perform other actions.",
+            "account_id": active_account_id,
+            "account_name": account_info["display_name"],
+            "handle": account_info["handle"]
         }
         
     except HTTPException:
@@ -883,4 +956,595 @@ async def general_chat(request: GeneralChatMessage):
 async def new_general_session():
     """Start a new general chat session."""
     return {"session_id": str(uuid.uuid4())}
+
+
+# =====================================================
+# FEED AI - HOME TIMELINE SCANNING & SUGGESTIONS
+# =====================================================
+
+class FeedScanRequest(BaseModel):
+    max_tweets: int = 10  # Number of tweets to scan from home
+
+
+class FeedSuggestionRequest(BaseModel):
+    tweet_id: str
+    tweet_text: str
+    tweet_author: str
+    suggestion_type: str = "all"  # "all", "quote", "reply", "independent"  
+    user_prompt: Optional[str] = None  # Custom instructions for AI
+
+
+class FeedPostRequest(BaseModel):
+    action_type: str  # "post", "quote", "reply"
+    text: str
+    original_tweet_url: Optional[str] = None  # Required for quote/reply
+
+
+@app.get("/feed/scan")
+async def scan_home_timeline(max_tweets: int = 10):
+    """
+    Scan the home timeline and return tweets for AI analysis.
+    Requires active browser session.
+    """
+    global global_browser_manager, session_status
+    
+    if not global_browser_manager or not global_browser_manager.is_driver_active():
+        raise HTTPException(
+            status_code=400, 
+            detail="Browser session not active. Please start session first."
+        )
+    
+    try:
+        scraper = TweetScraper(global_browser_manager)
+        tweets = scraper.scrape_home_timeline(max_tweets=max_tweets)
+        
+        # Convert tweets to dict format
+        tweets_data = []
+        for tweet in tweets:
+            if hasattr(tweet, 'model_dump'):
+                tweet_dict = tweet.model_dump(mode='json')
+            elif hasattr(tweet, 'dict'):
+                tweet_dict = tweet.dict()
+                # Handle datetime serialization
+                for key, value in tweet_dict.items():
+                    if isinstance(value, datetime):
+                        tweet_dict[key] = value.isoformat()
+            else:
+                tweet_dict = tweet
+            tweets_data.append(tweet_dict)
+        
+        return {
+            "status": "success",
+            "tweets": tweets_data,
+            "count": len(tweets_data)
+        }
+        
+    except Exception as e:
+        logger.error(f"Feed scan failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Feed scan failed: {str(e)}")
+
+
+@app.post("/feed/suggest")
+async def generate_feed_suggestion(request: FeedSuggestionRequest):
+    """
+    Generate AI suggestions for engaging with a specific tweet.
+    """
+    try:
+        suggestions = await groq_service.generate_tweet_suggestion(
+            tweet_text=request.tweet_text,
+            tweet_author=request.tweet_author,
+            suggestion_type=request.suggestion_type,
+            user_prompt=request.user_prompt
+        )
+        
+        return {
+            "status": "success",
+            "tweet_id": request.tweet_id,
+            "suggestions": suggestions
+        }
+        
+    except Exception as e:
+        logger.error(f"Suggestion generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Suggestion generation failed: {str(e)}")
+
+
+@app.post("/feed/post")
+async def post_from_feed_suggestion(
+    request: FeedPostRequest, 
+    user: User = Depends(get_current_user), 
+    publisher: TweetPublisher = Depends(get_publisher)
+):
+    """
+    Post a tweet based on AI suggestion.
+    Supports: new post, quote tweet, or reply.
+    """
+    global global_browser_manager
+    
+    if not global_browser_manager or not global_browser_manager.is_driver_active():
+        raise HTTPException(
+            status_code=400, 
+            detail="Browser session not active. Please start session first."
+        )
+    
+    try:
+        if request.action_type == "post":
+            # Post as a new independent tweet
+            content = TweetContent(text=request.text)
+            success = await publisher.post_new_tweet(content)
+            
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to post tweet")
+            
+            return {"status": "success", "message": "Tweet posted successfully", "action": "post"}
+            
+        elif request.action_type == "quote":
+            # Quote tweet
+            if not request.original_tweet_url:
+                raise HTTPException(status_code=400, detail="original_tweet_url is required for quote tweets")
+            
+            # Scrape the original tweet first
+            scraper = TweetScraper(publisher.browser_manager)
+            tweets = scraper.scrape_tweets_from_url(request.original_tweet_url, "single_tweet", max_tweets=1)
+            
+            if not tweets:
+                raise HTTPException(status_code=404, detail="Could not fetch original tweet for quoting")
+            
+            original = tweets[0]
+            success = await publisher.retweet_tweet(original, quote_text_prompt_or_direct=request.text)
+            
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to post quote tweet")
+            
+            return {"status": "success", "message": "Quote tweet posted successfully", "action": "quote"}
+            
+        elif request.action_type == "reply":
+            # Reply to tweet
+            if not request.original_tweet_url:
+                raise HTTPException(status_code=400, detail="original_tweet_url is required for replies")
+            
+            # Scrape the original tweet first
+            scraper = TweetScraper(publisher.browser_manager)
+            tweets = scraper.scrape_tweets_from_url(request.original_tweet_url, "single_tweet", max_tweets=1)
+            
+            if not tweets:
+                raise HTTPException(status_code=404, detail="Could not fetch original tweet for replying")
+            
+            original = tweets[0]
+            success = await publisher.reply_to_tweet(original, request.text)
+            
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to post reply")
+            
+            return {"status": "success", "message": "Reply posted successfully", "action": "reply"}
+            
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid action_type: {request.action_type}. Use 'post', 'quote', or 'reply'")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Feed post failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Post failed: {str(e)}")
+
+
+# =====================================================
+# CURATOR API ENDPOINTS
+# =====================================================
+
+from src.features.curator import (
+    CuratorService,
+    get_curator_service,
+    get_all_families,
+    get_all_archetypes,
+)
+from src.features.curator.archetypes import get_archetypes_for_family
+from fastapi import File, UploadFile
+import base64
+
+
+class CuratorAnalyzeRequest(BaseModel):
+    image_base64: Optional[str] = None  # Base64 encoded image
+    image_url: Optional[str] = None
+    skip_llm_analysis: bool = False
+
+
+class CuratorGenerateRequest(BaseModel):
+    image_id: str
+    family_id: Optional[str] = None
+    archetype_id: Optional[str] = None
+    custom_prompt: Optional[str] = None
+
+
+@app.get("/curator/families")
+async def get_tweet_families():
+    """Get all available tweet families."""
+    try:
+        from src.features.curator.family_engine import get_all_families
+        families = get_all_families()
+        return {
+            "families": [f.model_dump() for f in families],
+            "count": len(families)
+        }
+    except Exception as e:
+        logger.error(f"Error getting families: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/curator/archetypes")
+async def get_tweet_archetypes(family_id: Optional[str] = None):
+    """Get tweet archetypes, optionally filtered by family."""
+    try:
+        from src.features.curator.archetypes import get_all_archetypes, get_archetypes_for_family
+        if family_id:
+            archetypes = get_archetypes_for_family(family_id)
+        else:
+            archetypes = get_all_archetypes()
+        return {
+            "archetypes": [a.model_dump() for a in archetypes],
+            "count": len(archetypes),
+            "family_filter": family_id
+        }
+    except Exception as e:
+        logger.error(f"Error getting archetypes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/curator/analyze")
+async def analyze_image(request: CuratorAnalyzeRequest):
+    """
+    Analyze an image for aesthetic qualities and tweet compatibility.
+    
+    Returns:
+    - Image metadata (colors, brightness, contrast, etc.)
+    - LLM analysis (mood, symbolism, themes)
+    - Taste score and approval status
+    - Recommended families and archetypes
+    """
+    try:
+        accounts = config_loader.get_accounts_config()
+        account_id = accounts[0].get("account_id", "default") if accounts else "default"
+        
+        curator = get_curator_service(groq_service, account_id)
+        
+        if request.image_base64:
+            # Decode base64 image
+            image_bytes = base64.b64decode(request.image_base64)
+            result = await curator.process_image(
+                image_bytes=image_bytes,
+                skip_llm_analysis=request.skip_llm_analysis
+            )
+        elif request.image_url:
+            # TODO: Download image from URL
+            return {"error": "URL-based analysis not yet implemented. Please use base64."}
+        else:
+            raise HTTPException(status_code=400, detail="Either image_base64 or image_url is required")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Image analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/curator/analyze/upload")
+async def analyze_uploaded_image(file: UploadFile = File(...), skip_llm_analysis: bool = False):
+    """
+    Analyze an uploaded image file.
+    """
+    try:
+        accounts = config_loader.get_accounts_config()
+        account_id = accounts[0].get("account_id", "default") if accounts else "default"
+        
+        curator = get_curator_service(groq_service, account_id)
+        
+        # Read uploaded file
+        image_bytes = await file.read()
+        
+        result = await curator.process_image(
+            image_bytes=image_bytes,
+            skip_llm_analysis=skip_llm_analysis
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Image upload analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/curator/generate")
+async def generate_curated_tweet(request: CuratorGenerateRequest):
+    """
+    Generate a tweet for a previously analyzed image.
+    
+    Args:
+    - image_id: ID of the analyzed image
+    - family_id: Optional override for tweet family
+    - archetype_id: Optional override for tweet archetype
+    - custom_prompt: Optional additional guidance
+    """
+    try:
+        accounts = config_loader.get_accounts_config()
+        account_id = accounts[0].get("account_id", "default") if accounts else "default"
+        
+        curator = get_curator_service(groq_service, account_id)
+        
+        result = await curator.generate_tweet_for_image(
+            image_id=request.image_id,
+            family_id=request.family_id,
+            archetype_id=request.archetype_id,
+            custom_prompt=request.custom_prompt
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Tweet generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/curator/gallery")
+async def get_curator_gallery(limit: int = 50):
+    """Get all analyzed images in the gallery."""
+    try:
+        accounts = config_loader.get_accounts_config()
+        account_id = accounts[0].get("account_id", "default") if accounts else "default"
+        
+        curator = get_curator_service(groq_service, account_id)
+        gallery = curator.get_gallery(limit)
+        
+        return {
+            "gallery": gallery,
+            "count": len(gallery)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting gallery: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/curator/generated")
+async def get_generated_tweets(limit: int = 20):
+    """Get recently generated tweets."""
+    try:
+        accounts = config_loader.get_accounts_config()
+        account_id = accounts[0].get("account_id", "default") if accounts else "default"
+        
+        curator = get_curator_service(groq_service, account_id)
+        tweets = curator.get_generated_tweets(limit)
+        
+        return {
+            "tweets": tweets,
+            "count": len(tweets)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting generated tweets: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/curator/post")
+async def post_curated_tweet(
+    image_id: str,
+    tweet_text: str,
+    family_id: str,
+    archetype_id: str,
+    user: User = Depends(get_current_user),
+    publisher: TweetPublisher = Depends(get_publisher)
+):
+    """
+    Post a curated tweet with image.
+    Records the family/archetype usage for diversity tracking.
+    """
+    try:
+        accounts = config_loader.get_accounts_config()
+        account_id = accounts[0].get("account_id", "default") if accounts else "default"
+        
+        curator = get_curator_service(groq_service, account_id)
+        
+        # Get the image path
+        from src.features.curator.database import get_image
+        image_meta = get_image(image_id)
+        
+        if not image_meta or not image_meta.local_path:
+            raise HTTPException(status_code=404, detail=f"Image {image_id} not found or has no local path")
+        
+        # Create tweet content
+        content = TweetContent(
+            text=tweet_text,
+            local_media_paths=[image_meta.local_path]
+        )
+        
+        # Post the tweet
+        success = await publisher.post_new_tweet(content)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to post tweet")
+        
+        # Record usage for diversity tracking
+        curator.record_post(family_id, archetype_id)
+        
+        return {
+            "status": "success",
+            "message": "Curated tweet posted successfully",
+            "family_id": family_id,
+            "archetype_id": archetype_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Curated post failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================================================
+# CLOUDINARY GALLERY ENDPOINTS
+# =====================================================
+
+from cloudinary_service import cloudinary_service, CloudinaryService
+
+
+@app.get("/gallery/images")
+async def get_gallery_images(max_results: int = 50, next_cursor: Optional[str] = None):
+    """
+    Fetch images from Cloudinary gallery.
+    Returns list of images with URLs and metadata.
+    """
+    try:
+        result = cloudinary_service.get_gallery_images(max_results, next_cursor)
+        return result
+    except Exception as e:
+        logger.error(f"Gallery fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/gallery/upload")
+async def upload_to_gallery(file: UploadFile = File(...), tags: Optional[str] = None):
+    """
+    Upload an image to Cloudinary gallery.
+    
+    Args:
+        file: Image file to upload
+        tags: Comma-separated tags (optional)
+    """
+    try:
+        # Read file bytes
+        file_bytes = await file.read()
+        
+        # Parse tags
+        tag_list = tags.split(",") if tags else None
+        
+        result = cloudinary_service.upload_image(
+            file_bytes=file_bytes,
+            tags=tag_list
+        )
+        
+        if result.get("error"):
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Gallery upload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/gallery/images/{public_id:path}")
+async def delete_gallery_image(public_id: str):
+    """
+    Delete an image from Cloudinary gallery.
+    Used after an image has been posted as a tweet.
+    
+    Args:
+        public_id: The Cloudinary public ID of the image
+    """
+    try:
+        result = cloudinary_service.delete_image(public_id)
+        
+        if result.get("error"):
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Gallery delete failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/curator/post-from-gallery")
+async def post_curated_tweet_from_gallery(
+    public_id: str,
+    tweet_text: str,
+    family_id: str,
+    archetype_id: str,
+    delete_after_post: bool = True,
+    user: User = Depends(get_current_user),
+    publisher: TweetPublisher = Depends(get_publisher)
+):
+    """
+    Post a curated tweet using an image from Cloudinary gallery.
+    Optionally deletes the image after posting.
+    
+    Args:
+        public_id: Cloudinary public ID of the image
+        tweet_text: The tweet text to post
+        family_id: Tweet family used
+        archetype_id: Archetype used
+        delete_after_post: Whether to delete the image after posting (default: True)
+    """
+    try:
+        import httpx
+        import tempfile
+        import os
+        
+        accounts = config_loader.get_accounts_config()
+        account_id = accounts[0].get("account_id", "default") if accounts else "default"
+        
+        curator = get_curator_service(groq_service, account_id)
+        
+        # Get the full image URL
+        image_url = cloudinary_service.get_image_url(public_id)
+        
+        if not image_url:
+            raise HTTPException(status_code=404, detail="Image not found in gallery")
+        
+        # Download the image to a temp file
+        async with httpx.AsyncClient() as client:
+            response = await client.get(image_url)
+            response.raise_for_status()
+            
+            # Save to temp file
+            suffix = ".jpg"
+            if "png" in image_url.lower():
+                suffix = ".png"
+            elif "webp" in image_url.lower():
+                suffix = ".webp"
+                
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(response.content)
+                temp_path = tmp.name
+        
+        try:
+            # Create tweet content
+            content = TweetContent(
+                text=tweet_text,
+                local_media_paths=[temp_path]
+            )
+            
+            # Post the tweet
+            success = await publisher.post_new_tweet(content)
+            
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to post tweet")
+            
+            # Record usage for diversity tracking
+            curator.record_post(family_id, archetype_id)
+            
+            # Delete from Cloudinary if requested
+            delete_result = None
+            if delete_after_post:
+                delete_result = cloudinary_service.delete_image(public_id)
+            
+            return {
+                "status": "success",
+                "message": "Curated tweet posted successfully",
+                "family_id": family_id,
+                "archetype_id": archetype_id,
+                "image_deleted": delete_after_post,
+                "delete_result": delete_result
+            }
+            
+        finally:
+            # Clean up temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Gallery post failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
