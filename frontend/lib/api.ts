@@ -57,4 +57,87 @@ export const profile = {
     get: (handle: string) => api.get(`/profile/${handle}`),
 };
 
+// Curator API for aesthetic tweet curation
+export const curator = {
+    // Get all tweet families
+    getFamilies: () => api.get('/curator/families'),
+
+    // Get archetypes, optionally filtered by family
+    getArchetypes: (familyId?: string) =>
+        api.get('/curator/archetypes', { params: { family_id: familyId } }),
+
+    // Analyze an image (base64)
+    analyzeImage: (imageBase64: string, skipLlmAnalysis: boolean = false) =>
+        api.post('/curator/analyze', {
+            image_base64: imageBase64,
+            skip_llm_analysis: skipLlmAnalysis
+        }),
+
+    // Analyze uploaded image file
+    analyzeUpload: async (file: File, skipLlmAnalysis: boolean = false) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('skip_llm_analysis', skipLlmAnalysis.toString());
+        return api.post('/curator/analyze/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        });
+    },
+
+    // Generate tweet for analyzed image
+    generateTweet: (imageId: string, familyId?: string, archetypeId?: string, customPrompt?: string) =>
+        api.post('/curator/generate', {
+            image_id: imageId,
+            family_id: familyId,
+            archetype_id: archetypeId,
+            custom_prompt: customPrompt,
+        }),
+
+    // Get gallery of analyzed images
+    getGallery: (limit: number = 50) =>
+        api.get('/curator/gallery', { params: { limit } }),
+
+    // Get generated tweets history
+    getGeneratedTweets: (limit: number = 20) =>
+        api.get('/curator/generated', { params: { limit } }),
+
+    // Post a curated tweet
+    postTweet: (imageId: string, tweetText: string, familyId: string, archetypeId: string) =>
+        api.post('/curator/post', null, {
+            params: { image_id: imageId, tweet_text: tweetText, family_id: familyId, archetype_id: archetypeId }
+        }),
+
+    // Post from Cloudinary gallery
+    postFromGallery: (publicId: string, tweetText: string, familyId: string, archetypeId: string, deleteAfterPost: boolean = true) =>
+        api.post('/curator/post-from-gallery', null, {
+            params: {
+                public_id: publicId,
+                tweet_text: tweetText,
+                family_id: familyId,
+                archetype_id: archetypeId,
+                delete_after_post: deleteAfterPost
+            }
+        }),
+};
+
+// Cloudinary Gallery API
+export const gallery = {
+    // Get images from Cloudinary gallery
+    getImages: (maxResults: number = 50, nextCursor?: string) =>
+        api.get('/gallery/images', { params: { max_results: maxResults, next_cursor: nextCursor } }),
+
+    // Upload image to gallery
+    upload: async (file: File, tags?: string) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        if (tags) formData.append('tags', tags);
+        return api.post('/gallery/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        });
+    },
+
+    // Delete image from gallery
+    delete: (publicId: string) =>
+        api.delete(`/gallery/images/${encodeURIComponent(publicId)}`),
+};
+
 export default api;
