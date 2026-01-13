@@ -9,9 +9,16 @@ import httpx
 from typing import List, Dict, Any, Optional
 import logging
 from dotenv import load_dotenv
+from pathlib import Path
 
 # Load environment variables from .env file
-load_dotenv()
+# Try both project root and backend directory
+backend_dir = Path(__file__).parent
+project_root = backend_dir.parent
+
+# Load from backend/.env first, then project root .env
+load_dotenv(backend_dir / ".env")
+load_dotenv(project_root / ".env")
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +27,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 if not GROQ_API_KEY:
-    logger.warning("GROQ_API_KEY not found in environment. Please set it in .env file.")
+    logger.warning("GROQ_API_KEY not found in environment. Please set it in backend/.env file.")
 
 # Available models (Updated based on Groq docs - Jan 2026)
 # Production Models
@@ -324,6 +331,98 @@ Conversation:
         except Exception as e:
             logger.error(f"Failed to extract insights: {e}")
             return {}
+
+
+    async def generate_tweet_suggestion(
+        self,
+        tweet_text: str,
+        tweet_author: str,
+        suggestion_type: str = "all",  # "all", "quote", "reply", "independent"
+        user_prompt: Optional[str] = None,
+        model: str = None
+    ) -> Dict[str, Any]:
+        """
+        Generate AI-based tweet suggestions based on a tweet from the timeline.
+        
+        Args:
+            tweet_text: The content of the original tweet
+            tweet_author: The author's handle of the original tweet
+            suggestion_type: Type of suggestion: "all" (all types), "quote", "reply", or "independent"
+            user_prompt: Optional user prompt to guide the AI generation
+            model: Model to use (defaults to DEFAULT_TEXT_MODEL)
+            
+        Returns:
+            Dict with generated suggestions for different tweet types
+        """
+        if model is None:
+            model = DEFAULT_TEXT_MODEL
+            
+        base_context = f"""You are a Twitter/X engagement expert. Analyze the following tweet and generate creative, engaging responses.
+
+Original Tweet by {tweet_author}:
+"{tweet_text}"
+"""
+        
+        if user_prompt:
+            base_context += f"""
+User's Additional Instructions: {user_prompt}
+"""
+        
+        prompt = base_context + """
+Generate suggestions for responding to or engaging with this tweet. Provide the following:
+
+1. **Quote Tweet**: A thoughtful quote tweet that adds value, insight, or a unique perspective (under 280 characters)
+2. **Reply**: An engaging reply that could spark conversation (under 280 characters)
+3. **Independent Tweet**: An original tweet inspired by the topic/theme of this tweet (under 280 characters)
+
+Format your response as JSON with the following structure:
+{
+    "quote_tweet": "Your quote tweet suggestion...",
+    "reply": "Your reply suggestion...",
+    "independent_tweet": "Your independent tweet suggestion...",
+    "context_summary": "Brief 1-2 sentence summary of what the original tweet is about"
+}
+
+Return ONLY the JSON, no markdown formatting or additional text.
+"""
+        
+        messages = [{"role": "user", "content": prompt}]
+        
+        try:
+            response = await self.chat_completion(messages, model, temperature=0.8, max_tokens=1024)
+            
+            # Parse JSON response
+            import json
+            response = response.strip()
+            if response.startswith("```"):
+                response = response.split("```")[1]
+                if response.startswith("json"):
+                    response = response[4:]
+            
+            result = json.loads(response)
+            
+            # Filter based on suggestion_type if not "all"
+            if suggestion_type != "all":
+                filtered_result = {"context_summary": result.get("context_summary", "")}
+                if suggestion_type == "quote":
+                    filtered_result["quote_tweet"] = result.get("quote_tweet", "")
+                elif suggestion_type == "reply":
+                    filtered_result["reply"] = result.get("reply", "")
+                elif suggestion_type == "independent":
+                    filtered_result["independent_tweet"] = result.get("independent_tweet", "")
+                return filtered_result
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to generate tweet suggestion: {e}")
+            return {
+                "quote_tweet": "",
+                "reply": "",
+                "independent_tweet": "",
+                "context_summary": "",
+                "error": str(e)
+            }
 
 
 # Singleton instance
