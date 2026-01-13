@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { clsx } from 'clsx';
-import { Home, Upload, BarChart2, Power, ChevronDown, LogOut, Loader2, Bot, MessageSquare } from 'lucide-react';
+import { Home, Upload, BarChart2, Power, ChevronDown, LogOut, Loader2, Bot, MessageSquare, UserCircle, Zap, Palette } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -17,10 +17,13 @@ export default function Navbar() {
 
     const navItems = [
         { name: 'Home', href: '/', icon: Home },
+        { name: 'Curator', href: '/curator', icon: Palette },
         { name: 'Upload', href: '/upload', icon: Upload },
         { name: 'Analytics', href: '/analyze', icon: BarChart2 },
+        { name: 'Feed AI', href: '/feed-ai', icon: Zap },
         { name: 'Profile AI', href: '/profile-chat', icon: Bot },
         { name: 'Chat', href: '/chat', icon: MessageSquare },
+        { name: 'Connect', href: '/connect', icon: UserCircle },
     ];
 
 
