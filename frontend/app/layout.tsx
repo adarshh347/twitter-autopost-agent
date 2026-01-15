@@ -13,6 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 import Navbar from "@/components/Navbar";
+import GlobalChatSidebar from "@/components/GlobalChatSidebar";
+import { SidebarProvider } from "@/context/SidebarContext";
 
 export const metadata: Metadata = {
   title: "Twitter Auto Agent",
@@ -29,8 +31,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50 text-gray-900`}
       >
-        <Navbar />
-        <main>{children}</main>
+        <SidebarProvider>
+          <Navbar />
+          <main>{children}</main>
+          <GlobalChatSidebar />
+        </SidebarProvider>
       </body>
     </html>
   );
