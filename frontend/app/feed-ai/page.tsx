@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { RefreshCcw, Sparkles, Send, MessageCircle, Quote, FileText, Loader2, ChevronDown, ChevronUp, Zap, AlertCircle } from 'lucide-react';
+import { RefreshCcw, Sparkles, Send, MessageCircle, Quote, FileText, Loader2, ChevronDown, ChevronUp, Zap, AlertCircle, Edit2, ExternalLink, PenLine, Wand2, Link } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
+import { useSidebar } from '@/context/SidebarContext';
 
 interface Tweet {
     tweet_id: string;
@@ -17,6 +18,7 @@ interface Tweet {
     tweet_url: string | null;
     profile_image_url: string | null;
     created_at: string | null;
+    embedded_media_urls?: string[];
 }
 
 interface Suggestion {
@@ -32,6 +34,19 @@ interface TweetWithSuggestion extends Tweet {
     isLoadingSuggestion?: boolean;
     isExpanded?: boolean;
     userPrompt?: string;
+    // Manual draft fields per tweet
+    manualDraft?: string;
+    manualDraftType?: 'quote' | 'reply' | 'post';
+    manualRefinements?: Refinement[];
+    isRefiningManual?: boolean;
+    selectedManualRefinement?: string | null;
+    showManualMode?: boolean;
+}
+
+interface Refinement {
+    version: number;
+    text: string;
+    style: string;
 }
 
 export default function FeedAIPage() {
@@ -43,6 +58,9 @@ export default function FeedAIPage() {
     const [globalPrompt, setGlobalPrompt] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const { openSidebar } = useSidebar();
+    const [manualUrl, setManualUrl] = useState('');
+    const [isFetchingUrl, setIsFetchingUrl] = useState(false);
 
     useEffect(() => {
         checkSession();
@@ -79,6 +97,58 @@ export default function FeedAIPage() {
             setError(err.response?.data?.detail || 'Failed to scan feed');
         } finally {
             setIsScanning(false);
+        }
+    };
+
+    const fetchTweetFromUrl = async () => {
+        if (!sessionActive) {
+            setError("Browser session not active. Please start a session first.");
+            return;
+        }
+
+        if (!manualUrl.trim()) {
+            setError("Please enter a tweet URL");
+            return;
+        }
+
+        // Basic URL validation
+        if (!manualUrl.includes('twitter.com/') && !manualUrl.includes('x.com/')) {
+            setError("Please enter a valid Twitter/X URL");
+            return;
+        }
+
+        setIsFetchingUrl(true);
+        setError(null);
+
+        try {
+            const res = await axios.post('http://localhost:8000/feed/fetch-url', {
+                tweet_url: manualUrl.trim()
+            });
+
+            const fetchedTweet: TweetWithSuggestion = {
+                ...res.data.tweet,
+                isExpanded: false,
+                userPrompt: ''
+            };
+
+            // Add to beginning of tweets list (avoid duplicates)
+            setTweets(prev => {
+                const exists = prev.find(t => t.tweet_id === fetchedTweet.tweet_id);
+                if (exists) {
+                    setSuccessMessage("Tweet already in list!");
+                    setTimeout(() => setSuccessMessage(null), 2000);
+                    return prev;
+                }
+                setSuccessMessage("Tweet added successfully!");
+                setTimeout(() => setSuccessMessage(null), 2000);
+                return [fetchedTweet, ...prev];
+            });
+
+            setManualUrl(''); // Clear input after success
+        } catch (err: any) {
+            setError(err.response?.data?.detail || 'Failed to fetch tweet from URL');
+        } finally {
+            setIsFetchingUrl(false);
         }
     };
 
@@ -150,6 +220,117 @@ export default function FeedAIPage() {
         setTweets(prev => prev.map(t =>
             t.tweet_id === tweetId ? { ...t, userPrompt: prompt } : t
         ));
+    };
+
+    const handleEditWithAI = (content: string, type: string) => {
+        const prompt = `I need help refining this ${type}. Here is the draft:\n\n"${content}"\n\nPlease suggest improvements to make it more engaging and professional.`;
+        openSidebar(prompt);
+    };
+
+    // Per-tweet manual draft handlers
+    const toggleManualMode = (tweetId: string) => {
+        setTweets(prev => prev.map(t =>
+            t.tweet_id === tweetId ? {
+                ...t,
+                showManualMode: !t.showManualMode,
+                manualDraftType: t.manualDraftType || 'quote'
+            } : t
+        ));
+    };
+
+    const updateManualDraft = (tweetId: string, draft: string) => {
+        setTweets(prev => prev.map(t =>
+            t.tweet_id === tweetId ? { ...t, manualDraft: draft } : t
+        ));
+    };
+
+    const updateManualDraftType = (tweetId: string, type: 'quote' | 'reply' | 'post') => {
+        setTweets(prev => prev.map(t =>
+            t.tweet_id === tweetId ? { ...t, manualDraftType: type } : t
+        ));
+    };
+
+    const selectManualRefinement = (tweetId: string, text: string | null) => {
+        setTweets(prev => prev.map(t =>
+            t.tweet_id === tweetId ? { ...t, selectedManualRefinement: text } : t
+        ));
+    };
+
+    const refineManualDraft = async (tweetId: string) => {
+        const tweet = tweets.find(t => t.tweet_id === tweetId);
+        if (!tweet?.manualDraft?.trim()) {
+            setError('Please write something to refine');
+            return;
+        }
+
+        setTweets(prev => prev.map(t =>
+            t.tweet_id === tweetId ? { ...t, isRefiningManual: true, manualRefinements: [], selectedManualRefinement: null } : t
+        ));
+
+        try {
+            const res = await axios.post('http://localhost:8000/feed/refine', {
+                draft_text: tweet.manualDraft,
+                post_type: tweet.manualDraftType || 'quote',
+                original_tweet_url: tweet.tweet_url || undefined,
+                original_tweet_text: tweet.text_content,
+            });
+
+            setTweets(prev => prev.map(t =>
+                t.tweet_id === tweetId ? { ...t, manualRefinements: res.data.refinements || [], isRefiningManual: false } : t
+            ));
+        } catch (err: any) {
+            setError(err.response?.data?.detail || 'Failed to refine draft');
+            setTweets(prev => prev.map(t =>
+                t.tweet_id === tweetId ? { ...t, isRefiningManual: false } : t
+            ));
+        }
+    };
+
+    const postManualContent = async (tweetId: string, text: string) => {
+        const tweet = tweets.find(t => t.tweet_id === tweetId);
+        if (!tweet || !text.trim()) return;
+
+        const actionType = tweet.manualDraftType || 'quote';
+        setIsPosting(`${tweetId}-manual`);
+        setError(null);
+
+        try {
+            await axios.post('http://localhost:8000/feed/post', {
+                action_type: actionType,
+                text: text,
+                original_tweet_url: actionType !== 'post' ? tweet.tweet_url : undefined
+            });
+
+            setSuccessMessage(`Successfully ${actionType === 'post' ? 'posted tweet' : actionType === 'quote' ? 'quote tweeted' : 'replied'}!`);
+            setTimeout(() => setSuccessMessage(null), 3000);
+
+            // Reset manual draft for this tweet
+            setTweets(prev => prev.map(t =>
+                t.tweet_id === tweetId ? {
+                    ...t,
+                    manualDraft: '',
+                    manualRefinements: [],
+                    selectedManualRefinement: null,
+                    showManualMode: false
+                } : t
+            ));
+        } catch (err: any) {
+            setError(err.response?.data?.detail || `Failed to ${actionType}`);
+        } finally {
+            setIsPosting(null);
+        }
+    };
+
+    const handleManualEditWithAI = (tweetId: string) => {
+        const tweet = tweets.find(t => t.tweet_id === tweetId);
+        if (!tweet) return;
+
+        const textToEdit = tweet.selectedManualRefinement || tweet.manualDraft || '';
+        if (!textToEdit.trim()) {
+            setError('Write or select text to edit with AI');
+            return;
+        }
+        handleEditWithAI(textToEdit, tweet.manualDraftType || 'quote');
     };
 
     return (
@@ -230,6 +411,58 @@ export default function FeedAIPage() {
                 </div>
             </div>
 
+            {/* Manual URL Input Section */}
+            <div className="glass-panel rounded-2xl p-5 mb-6">
+                <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-teal-500 flex items-center justify-center text-white shadow-md">
+                        <Link size={20} />
+                    </div>
+                    <div>
+                        <h3 className="font-semibold text-gray-900">Analyze Specific Tweet</h3>
+                        <p className="text-xs text-gray-500">Paste a tweet URL to get AI suggestions</p>
+                    </div>
+                </div>
+
+                <div className="flex gap-2">
+                    <input
+                        type="text"
+                        value={manualUrl}
+                        onChange={(e) => setManualUrl(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !isFetchingUrl && sessionActive) {
+                                fetchTweetFromUrl();
+                            }
+                        }}
+                        placeholder="https://x.com/username/status/123... or https://twitter.com/..."
+                        className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-cyan-300 focus:border-cyan-400 transition-all"
+                    />
+                    <button
+                        onClick={fetchTweetFromUrl}
+                        disabled={isFetchingUrl || !sessionActive || !manualUrl.trim()}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 text-white font-medium hover:from-cyan-600 hover:to-teal-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+                    >
+                        {isFetchingUrl ? (
+                            <>
+                                <Loader2 size={18} className="animate-spin" />
+                                Fetching...
+                            </>
+                        ) : (
+                            <>
+                                <Sparkles size={18} />
+                                Fetch & Analyze
+                            </>
+                        )}
+                    </button>
+                </div>
+
+                {!sessionActive && (
+                    <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                        <AlertCircle size={12} />
+                        Start a browser session to use this feature
+                    </p>
+                )}
+            </div>
+
             {/* Alerts */}
             <AnimatePresence>
                 {error && (
@@ -308,8 +541,35 @@ export default function FeedAIPage() {
                                     <div className="flex items-center gap-2 mb-1">
                                         <span className="font-semibold text-gray-900 truncate">{tweet.user_name || 'Unknown'}</span>
                                         <span className="text-gray-400 text-sm truncate">{tweet.user_handle || ''}</span>
+                                        {tweet.tweet_url && (
+                                            <a
+                                                href={tweet.tweet_url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="ml-auto text-gray-400 hover:text-violet-500 transition-colors"
+                                                title="View on Twitter"
+                                            >
+                                                <ExternalLink size={16} />
+                                            </a>
+                                        )}
                                     </div>
                                     <p className="text-gray-700 whitespace-pre-wrap break-words">{tweet.text_content}</p>
+
+                                    {/* Embedded Media/Images */}
+                                    {tweet.embedded_media_urls && tweet.embedded_media_urls.length > 0 && (
+                                        <div className={`mt-3 grid gap-2 ${tweet.embedded_media_urls.length === 1 ? 'grid-cols-1' : tweet.embedded_media_urls.length === 2 ? 'grid-cols-2' : 'grid-cols-2'}`}>
+                                            {tweet.embedded_media_urls.slice(0, 4).map((url, idx) => (
+                                                <div key={idx} className="relative rounded-xl overflow-hidden bg-gray-100 aspect-video">
+                                                    <img
+                                                        src={url}
+                                                        alt={`Tweet media ${idx + 1}`}
+                                                        className="w-full h-full object-cover hover:scale-105 transition-transform cursor-pointer"
+                                                        onClick={() => window.open(url, '_blank')}
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
 
                                     {/* Engagement Stats */}
                                     <div className="flex items-center gap-4 mt-3 text-xs text-gray-400">
@@ -389,6 +649,7 @@ export default function FeedAIPage() {
                                                             title="Quote Tweet"
                                                             content={tweet.suggestion.quote_tweet}
                                                             onPost={() => postAction(tweet.tweet_id, 'quote', tweet.suggestion?.quote_tweet || '')}
+                                                            onEdit={() => handleEditWithAI(tweet.suggestion?.quote_tweet || '', 'quote tweet')}
                                                             isLoading={isPosting === `${tweet.tweet_id}-quote`}
                                                             color="blue"
                                                         />
@@ -401,6 +662,7 @@ export default function FeedAIPage() {
                                                             title="Reply"
                                                             content={tweet.suggestion.reply}
                                                             onPost={() => postAction(tweet.tweet_id, 'reply', tweet.suggestion?.reply || '')}
+                                                            onEdit={() => handleEditWithAI(tweet.suggestion?.reply || '', 'reply')}
                                                             isLoading={isPosting === `${tweet.tweet_id}-reply`}
                                                             color="green"
                                                         />
@@ -413,10 +675,134 @@ export default function FeedAIPage() {
                                                             title="New Tweet"
                                                             content={tweet.suggestion.independent_tweet}
                                                             onPost={() => postAction(tweet.tweet_id, 'post', tweet.suggestion?.independent_tweet || '')}
+                                                            onEdit={() => handleEditWithAI(tweet.suggestion?.independent_tweet || '', 'tweet')}
                                                             isLoading={isPosting === `${tweet.tweet_id}-post`}
                                                             color="violet"
                                                         />
                                                     )}
+                                                </div>
+
+                                                {/* Write Your Own Section */}
+                                                <div className="mt-4 pt-4 border-t border-violet-100">
+                                                    <button
+                                                        onClick={() => toggleManualMode(tweet.tweet_id)}
+                                                        className="flex items-center gap-2 text-sm font-medium text-emerald-600 hover:text-emerald-700"
+                                                    >
+                                                        <PenLine size={16} />
+                                                        {tweet.showManualMode ? 'Hide Manual Mode' : 'Write Your Own Response'}
+                                                    </button>
+
+                                                    <AnimatePresence>
+                                                        {tweet.showManualMode && (
+                                                            <motion.div
+                                                                initial={{ height: 0, opacity: 0 }}
+                                                                animate={{ height: 'auto', opacity: 1 }}
+                                                                exit={{ height: 0, opacity: 0 }}
+                                                                className="overflow-hidden"
+                                                            >
+                                                                <div className="mt-4 space-y-3 p-4 bg-white rounded-xl border border-emerald-100">
+                                                                    {/* Type Selector */}
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="text-xs font-medium text-gray-500">Type:</span>
+                                                                        <div className="flex gap-1.5">
+                                                                            {(['quote', 'reply', 'post'] as const).map(type => (
+                                                                                <button
+                                                                                    key={type}
+                                                                                    onClick={() => updateManualDraftType(tweet.tweet_id, type)}
+                                                                                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${tweet.manualDraftType === type
+                                                                                        ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200'
+                                                                                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                                                                        }`}
+                                                                                >
+                                                                                    {type === 'post' ? 'New Tweet' : type === 'quote' ? 'Quote' : 'Reply'}
+                                                                                </button>
+                                                                            ))}
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* Text Area */}
+                                                                    <textarea
+                                                                        value={tweet.manualDraft || ''}
+                                                                        onChange={(e) => updateManualDraft(tweet.tweet_id, e.target.value)}
+                                                                        placeholder="Write your response here..."
+                                                                        rows={2}
+                                                                        maxLength={500}
+                                                                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
+                                                                    />
+
+                                                                    <div className="flex items-center justify-between">
+                                                                        <span className="text-xs text-gray-400">{(tweet.manualDraft?.length || 0)}/280</span>
+                                                                        <div className="flex gap-2">
+                                                                            <button
+                                                                                onClick={() => handleManualEditWithAI(tweet.tweet_id)}
+                                                                                disabled={!tweet.manualDraft?.trim() && !tweet.selectedManualRefinement}
+                                                                                className="flex items-center gap-1 px-3 py-1.5 bg-white border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-50 transition-all disabled:opacity-50"
+                                                                            >
+                                                                                <Edit2 size={14} />
+                                                                                Edit with AI
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={() => refineManualDraft(tweet.tweet_id)}
+                                                                                disabled={tweet.isRefiningManual || !tweet.manualDraft?.trim()}
+                                                                                className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-medium rounded-lg hover:from-emerald-600 hover:to-teal-600 transition-all disabled:opacity-50 shadow-sm"
+                                                                            >
+                                                                                {tweet.isRefiningManual ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                                                                                Get Refinements
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* Manual Refinements */}
+                                                                    {tweet.manualRefinements && tweet.manualRefinements.length > 0 && (
+                                                                        <div className="space-y-2 pt-3 border-t border-gray-100">
+                                                                            <h5 className="text-xs font-semibold text-gray-500 uppercase">Select Version</h5>
+
+                                                                            {/* Original */}
+                                                                            <div
+                                                                                onClick={() => selectManualRefinement(tweet.tweet_id, tweet.manualDraft || '')}
+                                                                                className={`p-2 rounded-lg border cursor-pointer transition-all text-xs ${tweet.selectedManualRefinement === tweet.manualDraft
+                                                                                    ? 'border-emerald-400 bg-emerald-50'
+                                                                                    : 'border-gray-200 bg-white hover:border-gray-300'
+                                                                                    }`}
+                                                                            >
+                                                                                <span className="text-[10px] font-bold text-gray-400 uppercase">Original</span>
+                                                                                <p className="text-gray-700 mt-1">{tweet.manualDraft}</p>
+                                                                            </div>
+
+                                                                            {tweet.manualRefinements.map((ref) => (
+                                                                                <div
+                                                                                    key={ref.version}
+                                                                                    onClick={() => selectManualRefinement(tweet.tweet_id, ref.text)}
+                                                                                    className={`p-2 rounded-lg border cursor-pointer transition-all text-xs ${tweet.selectedManualRefinement === ref.text
+                                                                                        ? 'border-emerald-400 bg-emerald-50'
+                                                                                        : 'border-gray-200 bg-white hover:border-gray-300'
+                                                                                        }`}
+                                                                                >
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        <span className="text-[10px] font-bold text-emerald-600 uppercase">v{ref.version}</span>
+                                                                                        <span className="text-[10px] text-gray-400">{ref.style}</span>
+                                                                                    </div>
+                                                                                    <p className="text-gray-700 mt-1">{ref.text}</p>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+
+                                                                    {/* Post Button */}
+                                                                    {(tweet.manualDraft?.trim() || tweet.selectedManualRefinement) && (
+                                                                        <button
+                                                                            onClick={() => postManualContent(tweet.tweet_id, tweet.selectedManualRefinement || tweet.manualDraft || '')}
+                                                                            disabled={isPosting === `${tweet.tweet_id}-manual`}
+                                                                            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-violet-500 to-purple-600 text-white font-medium rounded-lg hover:from-violet-600 hover:to-purple-700 transition-all disabled:opacity-50 shadow-md"
+                                                                        >
+                                                                            {isPosting === `${tweet.tweet_id}-manual` ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                                                                            Post {tweet.manualDraftType === 'post' ? 'Tweet' : tweet.manualDraftType === 'quote' ? 'Quote' : 'Reply'}
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            </motion.div>
+                                                        )}
+                                                    </AnimatePresence>
                                                 </div>
                                             </>
                                         )}
@@ -437,6 +823,7 @@ function SuggestionCard({
     title,
     content,
     onPost,
+    onEdit,
     isLoading,
     color
 }: {
@@ -444,6 +831,7 @@ function SuggestionCard({
     title: string;
     content: string;
     onPost: () => void;
+    onEdit: () => void;
     isLoading: boolean;
     color: 'blue' | 'green' | 'violet';
 }) {
@@ -474,23 +862,33 @@ function SuggestionCard({
                 <span className="font-semibold text-gray-800 text-sm">{title}</span>
             </div>
             <p className="text-sm text-gray-700 mb-3 whitespace-pre-wrap">{content}</p>
-            <button
-                onClick={onPost}
-                disabled={isLoading}
-                className={`w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-gradient-to-r ${colorClasses[color]} text-white text-sm font-medium transition-all disabled:opacity-50 shadow-md hover:shadow-lg`}
-            >
-                {isLoading ? (
-                    <>
-                        <Loader2 size={14} className="animate-spin" />
-                        Posting...
-                    </>
-                ) : (
-                    <>
-                        <Send size={14} />
-                        Post This
-                    </>
-                )}
-            </button>
+            <div className="flex items-center gap-2">
+                <button
+                    onClick={onEdit}
+                    disabled={isLoading}
+                    className="flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-white border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 hover:text-gray-900 transition-colors shadow-sm"
+                >
+                    <Edit2 size={14} />
+                    Edit
+                </button>
+                <button
+                    onClick={onPost}
+                    disabled={isLoading}
+                    className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r ${colorClasses[color]} text-white text-sm font-medium transition-all disabled:opacity-50 shadow-md hover:shadow-lg`}
+                >
+                    {isLoading ? (
+                        <>
+                            <Loader2 size={14} className="animate-spin" />
+                            Post
+                        </>
+                    ) : (
+                        <>
+                            <Send size={14} />
+                            Post
+                        </>
+                    )}
+                </button>
+            </div>
         </div>
     );
 }
