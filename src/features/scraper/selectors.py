@@ -25,7 +25,12 @@ X_HASHTAG_LINKS_XPATH = "//a[contains(@href, 'src=hashtag_click')]"
 X_MENTION_LINKS_XPATH = "//div[@data-testid='tweetText']//a[contains(text(), '@')]"
 X_PROFILE_IMG_XPATH = "//div[@data-testid='Tweet-User-Avatar']//img"
 X_MEDIA_XPATH = (
-    "//div[@data-testid='tweetPhoto']//img | //div[contains(@data-testid, 'videoPlayer')]//video"
+    "//div[@data-testid='tweetPhoto']//img"
+    " | //div[contains(@data-testid, 'videoPlayer')]//video"
+    " | //img[contains(@src, 'pbs.twimg.com/media')]"
+    " | //img[contains(@src, 'video.twimg.com')]"
+    " | //div[@aria-label='Image']//img"
+    " | //a[contains(@href, '/photo/')]//img"
 )
 X_VERIFIED_ICON_SVG = "//*[local-name()='svg' and @data-testid='icon-verified']"
 
