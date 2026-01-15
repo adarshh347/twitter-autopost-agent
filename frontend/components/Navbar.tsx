@@ -7,6 +7,7 @@ import { Home, Upload, BarChart2, Power, ChevronDown, LogOut, Loader2, Bot, Mess
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSidebar } from '@/context/SidebarContext';
 
 export default function Navbar() {
     const pathname = usePathname();
@@ -14,6 +15,7 @@ export default function Navbar() {
     const [sessionStatus, setSessionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('disconnected');
     const [loading, setLoading] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const { toggleSidebar, isSidebarOpen } = useSidebar();
 
     const navItems = [
         { name: 'Home', href: '/', icon: Home },
@@ -101,6 +103,24 @@ export default function Navbar() {
                     {navItems.map((item) => {
                         const isActive = pathname === item.href;
                         const Icon = item.icon;
+
+                        if (item.name === 'Chat') {
+                            return (
+                                <button
+                                    key={item.href}
+                                    onClick={toggleSidebar}
+                                    className={clsx(
+                                        "relative px-4 py-2 rounded-full text-sm font-medium transition-all duration-300 flex items-center gap-2",
+                                        isSidebarOpen
+                                            ? "text-gray-900 bg-white shadow-sm ring-1 ring-gray-100"
+                                            : "text-gray-500 hover:text-gray-900 hover:bg-white/50"
+                                    )}
+                                >
+                                    <Icon size={16} className={clsx(isSidebarOpen ? "stroke-[2.5px]" : "stroke-[2px]")} />
+                                    <span className="hidden sm:inline">{item.name}</span>
+                                </button>
+                            );
+                        }
 
                         return (
                             <Link
