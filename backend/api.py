@@ -55,7 +55,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # In a real SaaS, this would be a pool of browsers keyed by user content
 global_browser_manager: Optional[BrowserManager] = None
 session_status: str = "disconnected"  # "disconnected", "connecting", "connected"
-active_account_id: str = "adarsh"  # Currently active account
+active_account_id: str = "kalidasa"  # Currently active account
 
 # Available accounts configuration
 AVAILABLE_ACCOUNTS = {
@@ -980,6 +980,57 @@ class FeedPostRequest(BaseModel):
     original_tweet_url: Optional[str] = None  # Required for quote/reply
 
 
+class FeedFetchUrlRequest(BaseModel):
+    tweet_url: str  # Direct URL to a tweet
+
+
+@app.post("/feed/fetch-url")
+async def fetch_tweet_from_url(request: FeedFetchUrlRequest):
+    """
+    Fetch a single tweet from a direct URL.
+    Useful for manually analyzing a specific tweet from the Feed AI page.
+    """
+    global global_browser_manager, session_status
+    
+    if not global_browser_manager or not global_browser_manager.is_driver_active():
+        raise HTTPException(
+            status_code=400, 
+            detail="Browser session not active. Please start session first."
+        )
+    
+    try:
+        scraper = TweetScraper(global_browser_manager)
+        tweets = scraper.scrape_tweets_from_url(request.tweet_url, "single_tweet", max_tweets=1)
+        
+        if not tweets:
+            raise HTTPException(status_code=404, detail="Could not fetch tweet from the provided URL")
+        
+        tweet = tweets[0]
+        
+        # Convert tweet to dict format
+        if hasattr(tweet, 'model_dump'):
+            tweet_dict = tweet.model_dump(mode='json')
+        elif hasattr(tweet, 'dict'):
+            tweet_dict = tweet.dict()
+            # Handle datetime serialization
+            for key, value in tweet_dict.items():
+                if isinstance(value, datetime):
+                    tweet_dict[key] = value.isoformat()
+        else:
+            tweet_dict = tweet
+        
+        return {
+            "status": "success",
+            "tweet": tweet_dict
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Fetch tweet from URL failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch tweet: {str(e)}")
+
+
 @app.get("/feed/scan")
 async def scan_home_timeline(max_tweets: int = 10):
     """
@@ -1047,6 +1098,82 @@ async def generate_feed_suggestion(request: FeedSuggestionRequest):
         logger.error(f"Suggestion generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Suggestion generation failed: {str(e)}")
 
+
+class RefineRequest(BaseModel):
+    draft_text: str  # User's original draft
+    post_type: str = "post"  # "post", "quote", "reply"
+    original_tweet_url: Optional[str] = None  # For quote/reply context
+    original_tweet_text: Optional[str] = None  # Optional context for quote/reply
+    user_instructions: Optional[str] = None  # Custom instructions
+
+
+@app.post("/feed/refine")
+async def refine_draft(request: RefineRequest):
+    """
+    Generate multiple AI refinement suggestions for a user's draft.
+    Returns the original text plus 3 refined alternatives.
+    """
+    try:
+        prompt = f"""You are a Twitter/X content expert. The user has written a draft and wants you to suggest refined versions.
+
+User's Draft:
+"{request.draft_text}"
+
+Post Type: {request.post_type}
+"""
+        
+        if request.original_tweet_text and request.post_type in ["quote", "reply"]:
+            prompt += f"""
+Context (responding to this tweet):
+"{request.original_tweet_text}"
+"""
+        
+        if request.user_instructions:
+            prompt += f"""
+User's Instructions: {request.user_instructions}
+"""
+        
+        prompt += """
+Generate exactly 3 refined versions of the draft. Each should:
+- Keep the core message intact
+- Be under 280 characters
+- Feel natural and engaging
+- Have a slightly different style or approach
+
+Format your response as JSON:
+{
+    "refinements": [
+        {"version": 1, "text": "First refined version...", "style": "Brief style description"},
+        {"version": 2, "text": "Second refined version...", "style": "Brief style description"},
+        {"version": 3, "text": "Third refined version...", "style": "Brief style description"}
+    ]
+}
+
+Return ONLY the JSON, no markdown formatting.
+"""
+        
+        messages = [{"role": "user", "content": prompt}]
+        response = await groq_service.chat_completion(messages, temperature=0.85, max_tokens=1024)
+        
+        # Parse JSON response
+        import json
+        response = response.strip()
+        if response.startswith("```"):
+            response = response.split("```")[1]
+            if response.startswith("json"):
+                response = response[4:]
+        
+        result = json.loads(response)
+        
+        return {
+            "status": "success",
+            "original": request.draft_text,
+            "refinements": result.get("refinements", [])
+        }
+        
+    except Exception as e:
+        logger.error(f"Draft refinement failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Draft refinement failed: {str(e)}")
 
 @app.post("/feed/post")
 async def post_from_feed_suggestion(
